@@ -1,0 +1,125 @@
+name: フォーエバー 自動投稿（X）
+
+on:
+  schedule:
+    - cron: '0 22 * * *'   # 毎日 07:00 JST (UTC+9)
+    - cron: '30 3 * * *'   # 毎日 12:30 JST
+    - cron: '0 12 * * *'   # 毎日 21:00 JST
+  workflow_dispatch:        # 手動実行も可能
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout x-auto-post (スクリプト取得)
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout メインリポジトリ (投稿ストック)
+        uses: actions/checkout@v4
+        with:
+          repository: ayakairo/ayaka
+          token: ${{ secrets.MAIN_REPO_TOKEN }}
+          path: ayaka-main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Post to X
+        env:
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          POSTS_FILE: ${{ github.workspace }}/ayaka-main/in_フォーエバー/X/投稿ストック.md
+        run: python post.py
+
+      - name: メインリポジトリに投稿済み状態をコミット
+        if: always()
+        run: |
+          cd ayaka-main
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add "in_フォーエバー/X/投稿ストック.md"
+          git diff --staged --quiet || git commit -m "auto: フォーエバーX投稿済みを更新 [skip ci]"
+          git push
+
+      - name: rejected_log をコミット (x-auto-post repo)
+        if: always()
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add rejected_log.md
+          git diff --staged --quiet || git commit -m "auto: rejected_log 更新 [skip ci]"
+          git push
+
+      - name: Check stock and notify if low
+        if: always()
+        env:
+          CHATWORK_API_TOKEN: ${{ secrets.CHATWORK_API_TOKEN }}
+          POSTS_FILE: ${{ github.workspace }}/ayaka-main/in_フォーエバー/X/投稿ストック.md
+        run: |
+          python3 << 'EOF'
+          import re, os, urllib.request, urllib.parse
+          from pathlib import Path
+
+          posts_file = Path(os.environ.get('POSTS_FILE', 'posts.md'))
+          if not posts_file.exists():
+              print('投稿ストックが見つかりません')
+              exit()
+
+          content = posts_file.read_text(encoding='utf-8')
+          remaining = len(re.findall(r'- \[ \]', content))
+          print(f'残りストック: {remaining}件')
+
+          if remaining <= 5:
+              token = os.environ.get('CHATWORK_API_TOKEN', '')
+              if not token:
+                  print('Chatwork token not set, skip notification')
+                  exit()
+              msg = f'【フォーエバーX自動投稿】残りストックが{remaining}件になりました。\n\nin_フォーエバー/X/投稿ストック.md に追加後、必ず git push origin main まで実行してください。'
+              data = urllib.parse.urlencode({'body': msg}).encode()
+              req = urllib.request.Request(
+                  'https://api.chatwork.com/v2/rooms/229193178/messages',
+                  data=data,
+                  headers={'X-ChatworkToken': token}
+              )
+              urllib.request.urlopen(req)
+              print('Chatworkのマイチャットに通知しました')
+          EOF
+
+      - name: エラー通知 (Chatwork)
+        if: failure()
+        env:
+          CHATWORK_API_TOKEN: ${{ secrets.CHATWORK_API_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 << 'EOF'
+          import os, urllib.request, urllib.parse
+
+          token = os.environ.get('CHATWORK_API_TOKEN', '')
+          run_url = os.environ.get('RUN_URL', '')
+          if not token:
+              print('Chatwork token not set, skip notification')
+              exit()
+
+          msg = f"""【フォーエバーX自動投稿】エラーが発生しました\n\nログURL: {run_url}\n\nこのメッセージをそのままClaudeに投げると診断・修正してくれます。"""
+
+          data = urllib.parse.urlencode({'body': msg}).encode()
+          req = urllib.request.Request(
+              'https://api.chatwork.com/v2/rooms/229193178/messages',
+              data=data,
+              headers={'X-ChatworkToken': token}
+          )
+          urllib.request.urlopen(req)
+          print('エラー通知をChatworkに送信しました')
+          EOF
