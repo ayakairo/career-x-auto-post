@@ -64,7 +64,8 @@ jobs:
           git push
 
       - name: Check stock and notify if low
-        if: always()
+        # 朝(07:00 JST)の実行時だけ通知する。全実行で鳴らすと1日3回のスパムになる。
+        if: always() && github.event.schedule == '0 22 * * *'
         env:
           CHATWORK_API_TOKEN: ${{ secrets.CHATWORK_API_TOKEN }}
           POSTS_FILE: ${{ github.workspace }}/ayaka-main/in_フォーエバー/X/投稿ストック.md
@@ -82,12 +83,14 @@ jobs:
           remaining = len(re.findall(r'- \[ \]', content))
           print(f'残りストック: {remaining}件')
 
-          if remaining <= 5:
+          # 1週間分(21本)を切ったら通知。これは補充トリガーではなく
+          # 「日曜の週次補充が飛んだ」ことを検知するセーフティネット。
+          if remaining <= 21:
               token = os.environ.get('CHATWORK_API_TOKEN', '')
               if not token:
                   print('Chatwork token not set, skip notification')
                   exit()
-              msg = f'【フォーエバーX自動投稿】残りストックが{remaining}件になりました。\n\nin_フォーエバー/X/投稿ストック.md に追加後、必ず git push origin main まで実行してください。'
+              msg = f'【フォーエバーX自動投稿】残りストックが{remaining}件（約{remaining // 3}日分）です。\n\n日曜の週次補充（/SNS週次）が飛んでいる可能性があります。\nin_フォーエバー/X/投稿ストック.md に追加後、必ず git push origin main まで実行してください。'
               data = urllib.parse.urlencode({'body': msg}).encode()
               req = urllib.request.Request(
                   'https://api.chatwork.com/v2/rooms/229193178/messages',
